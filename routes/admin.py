@@ -55,7 +55,11 @@ DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 @router.post("/login")
 def admin_login(data: AdminLoginInput, db: Session = Depends(get_db)):
     admin = db.query(Admin).filter(Admin.email == data.email).first()
-    if not admin or not bcrypt.verify(data.password, admin.password):
+    if not admin:
+        raise HTTPException(401, "Invalid admin credentials ❌")
+    # ✅ Fix: truncate password to 72 bytes (bcrypt limit)
+    password_truncated = data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    if not bcrypt.verify(password_truncated, admin.password):
         raise HTTPException(401, "Invalid admin credentials ❌")
     return {"message": "Admin login successful ✅",
             "admin_id": admin.id, "name": admin.name, "email": admin.email}
