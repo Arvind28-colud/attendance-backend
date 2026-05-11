@@ -8,6 +8,5 @@ pydantic==2.10.6
 apscheduler==3.10.4
 cryptography==42.0.7
 python-dotenv
-deepface
-tensorflow
-tf-keras
+numpy
+Pillow
