@@ -5,7 +5,12 @@ from models import Student, Teacher, Course, Department
 from passlib.hash import bcrypt
 from pydantic import BaseModel
 from typing import Optional
-from deepface import DeepFace
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except ImportError:
+    DeepFace = None
+    DEEPFACE_AVAILABLE = False
 import numpy as np
 import base64
 import json
