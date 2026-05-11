@@ -14,8 +14,8 @@ import requests
 router = APIRouter()
 
 # ── Face++ Config ───────────────────────────────────────────
-FACEPP_API_KEY     = os.getenv("FACEPP_API_KEY")
-FACEPP_API_SECRET  = os.getenv("FACEPP_API_SECRET")
+FACEPP_API_KEY     = os.getenv("eeJffdjvOdWFfravdGpbnCyCm3Ecv-86")
+FACEPP_API_SECRET  = os.getenv("zpiAoHXYSBCaT7incw-00JVEpycrK0co")
 FACEPP_DETECT_URL  = "https://api-us.faceplusplus.com/facepp/v3/detect"
 FACEPP_COMPARE_URL = "https://api-us.faceplusplus.com/facepp/v3/compare"
 
