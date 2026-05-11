@@ -5,17 +5,20 @@ from models import Student, Teacher, Course, Department
 from passlib.hash import bcrypt
 from pydantic import BaseModel
 from typing import Optional
-try:
-    from deepface import DeepFace
-    DEEPFACE_AVAILABLE = True
-except ImportError:
-    DeepFace = None
-    DEEPFACE_AVAILABLE = False
-import numpy as np
 import base64
 import json
 import io
-from PIL import Image
+
+try:
+    from deepface import DeepFace
+    import numpy as np
+    from PIL import Image
+    DEEPFACE_AVAILABLE = True
+except ImportError:
+    DeepFace = None
+    np = None
+    Image = None
+    DEEPFACE_AVAILABLE = False
 
 router = APIRouter()
 
@@ -67,6 +70,8 @@ def base64_to_image_path(b64: str, filename: str = "temp_face.jpg") -> str:
 
 def get_face_embedding(b64: str, filename: str = "temp.jpg") -> list:
     """Get face embedding using DeepFace. Returns list or raises."""
+    if not DEEPFACE_AVAILABLE:
+        raise HTTPException(503, "Face recognition not available on server ❌")
     img_path = base64_to_image_path(b64, filename)
     result   = DeepFace.represent(
         img_path      = img_path,
@@ -75,7 +80,7 @@ def get_face_embedding(b64: str, filename: str = "temp.jpg") -> list:
         detector_backend  = "opencv"
     )
     return result[0]["embedding"]
-
+    
 def embedding_to_str(embedding: list) -> str:
     return json.dumps(embedding)
 
