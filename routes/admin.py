@@ -57,10 +57,12 @@ def admin_login(data: AdminLoginInput, db: Session = Depends(get_db)):
     admin = db.query(Admin).filter(Admin.email == data.email).first()
     if not admin:
         raise HTTPException(401, "Invalid admin credentials ❌")
-    # ✅ Fix: truncate password to 72 bytes (bcrypt limit)
-    password_truncated = data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
-    if not bcrypt.verify(password_truncated, admin.password):
-        raise HTTPException(401, "Invalid admin credentials ❌")
+    try:
+        pwd = data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+        if not bcrypt.verify(pwd, admin.password):
+            raise HTTPException(401, "Invalid admin credentials ❌")
+    except Exception as e:
+        raise HTTPException(500, f"Auth error: {str(e)}")
     return {"message": "Admin login successful ✅",
             "admin_id": admin.id, "name": admin.name, "email": admin.email}
 
