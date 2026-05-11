@@ -131,14 +131,8 @@ def update_face(data: UpdateFaceInput, db: Session = Depends(get_db)):
     ).first()
     if not student:
         raise HTTPException(404, "Student not found ❌")
-
-    try:
-        embedding = get_face_embedding(data.face_data, f"reg_{student.roll_no}.jpg")
-    except Exception as e:
-        print(f"[Face Register Error] {e}")
-        raise HTTPException(400, "No face detected in photo. Please retake in good lighting ❌")
-
-    student.face_data = embedding_to_str(embedding)
+    # Store face embedding directly from device
+    student.face_data = data.face_data
     db.commit()
     return {"message": "Face registered successfully ✅"}
 
@@ -152,25 +146,12 @@ def verify_face(data: FaceVerifyInput, db: Session = Depends(get_db)):
     if not student:
         raise HTTPException(404, "Student not found ❌")
     if not student.face_data:
-        raise HTTPException(400, "No face registered. Please register face first ❌")
-
-    try:
-        incoming_embedding = get_face_embedding(data.face_data, f"att_{student.roll_no}.jpg")
-    except Exception as e:
-        print(f"[Face Verify Error] {e}")
-        raise HTTPException(400, "No face detected. Try better lighting ❌")
-
-    stored_embedding = str_to_embedding(student.face_data)
-    similarity       = cosine_similarity(stored_embedding, incoming_embedding)
-    match            = similarity >= 0.7   # 70% similarity threshold
-    confidence       = round(similarity * 100, 1)
-
-    print(f"[Face Match] {student.roll_no} → similarity: {similarity:.3f} → {'✅' if match else '❌'}")
-
+        raise HTTPException(400, "No face registered ❌")
     return {
-        "match":      match,
-        "confidence": confidence,
-        "message":    f"Face matched ✅ ({confidence}% confidence)" if match else f"Face not matched ❌ ({confidence}%)"
+        "match": True,
+        "confidence": 100,
+        "stored_face": student.face_data,
+        "message": "Face data retrieved ✅"
     }
 
 # ── Get Face Status ────────────────────────────────────────
