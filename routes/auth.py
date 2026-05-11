@@ -8,89 +8,52 @@ from typing import Optional
 import base64
 import json
 import io
-
-try:
-    from deepface import DeepFace
-    import numpy as np
-    from PIL import Image
-    DEEPFACE_AVAILABLE = True
-except ImportError:
-    DeepFace = None
-    np = None
-    Image = None
-    DEEPFACE_AVAILABLE = False
+import os
+import requests
 
 router = APIRouter()
 
-# ── Input Models ───────────────────────────────────────────
+# ── Face++ Config ───────────────────────────────────────────
+FACEPP_API_KEY    = os.getenv("eeJffdjvOdWFfravdGpbnCyCm3Ecv-86")
+FACEPP_API_SECRET = os.getenv("zpiAoHXYSBCaT7incw-00JVEpycrK0co")
+FACEPP_DETECT_URL = "https://api-us.faceplusplus.com/facepp/v3/detect"
+FACEPP_COMPARE_URL = "https://api-us.faceplusplus.com/facepp/v3/compare"
 
-class StudentRegisterInput(BaseModel):
-    name:          str
-    email:         str
-    roll_no:       str
-    password:      str
-    course_id:     int
-    year:          Optional[str] = None
-    semester:      Optional[int] = 1
-    academic_year: Optional[str] = '2025-2026'
+# ── Face++ Helper Functions ─────────────────────────────────
+def detect_face(image_base64: str) -> str:
+    """Send image to Face++ and get face_token"""
+    try:
+        response = requests.post(FACEPP_DETECT_URL, data={
+            "api_key":    FACEPP_API_KEY,
+            "api_secret": FACEPP_API_SECRET,
+            "image_base64": image_base64,
+            "return_landmark": 0,
+            "return_attributes": "none"
+        })
+        result = response.json()
+        if "faces" not in result or len(result["faces"]) == 0:
+            return None
+        return result["faces"][0]["face_token"]
+    except Exception as e:
+        print(f"[Face++ Detect Error] {e}")
+        return None
 
-class TeacherRegisterInput(BaseModel):
-    name:          str
-    email:         str
-    password:      str
-    qualification: Optional[str] = None
-    department_id: Optional[int] = None
-
-class LoginInput(BaseModel):
-    email:    Optional[str] = None
-    roll_no:  Optional[str] = None
-    password: str
-
-class UpdateFaceInput(BaseModel):
-    roll_no:   str
-    face_data: str   # base64 image
-
-class FaceVerifyInput(BaseModel):
-    roll_no:   str
-    face_data: str   # base64 image
-
-# ── Helpers ────────────────────────────────────────────────
-
-def base64_to_image_path(b64: str, filename: str = "temp_face.jpg") -> str:
-    """Save base64 image to a temp file and return path"""
-    import os, tempfile
-    if ',' in b64:
-        b64 = b64.split(',')[1]
-    b64 += '=' * (-len(b64) % 4)
-    img_bytes = base64.b64decode(b64)
-    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-    tmp_path = os.path.join(tempfile.gettempdir(), filename)
-    img.save(tmp_path)
-    return tmp_path
-
-def get_face_embedding(b64: str, filename: str = "temp.jpg") -> list:
-    """Get face embedding using DeepFace. Returns list or raises."""
-    if not DEEPFACE_AVAILABLE:
-        raise HTTPException(503, "Face recognition not available on server ❌")
-    img_path = base64_to_image_path(b64, filename)
-    result   = DeepFace.represent(
-        img_path      = img_path,
-        model_name    = "Facenet",
-        enforce_detection = True,
-        detector_backend  = "opencv"
-    )
-    return result[0]["embedding"]
-    
-def embedding_to_str(embedding: list) -> str:
-    return json.dumps(embedding)
-
-def str_to_embedding(s: str) -> list:
-    return json.loads(s)
-
-def cosine_similarity(a: list, b: list) -> float:
-    a, b = np.array(a), np.array(b)
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-
+def compare_faces(face_token1: str, face_token2: str) -> float:
+    """Compare two face tokens and return confidence score"""
+    try:
+        response = requests.post(FACEPP_COMPARE_URL, data={
+            "api_key":      FACEPP_API_KEY,
+            "api_secret":   FACEPP_API_SECRET,
+            "face_token1":  face_token1,
+            "face_token2":  face_token2,
+        })
+        result = response.json()
+        if "confidence" not in result:
+            return 0.0
+        return result["confidence"]
+    except Exception as e:
+        print(f"[Face++ Compare Error] {e}")
+        return 0.0
 # ── Student Register ───────────────────────────────────────
 
 @router.post("/student/register")
@@ -131,8 +94,17 @@ def update_face(data: UpdateFaceInput, db: Session = Depends(get_db)):
     ).first()
     if not student:
         raise HTTPException(404, "Student not found ❌")
-    # Store face embedding directly from device
-    student.face_data = data.face_data
+
+    # Send to Face++ and get face token
+    face_token = detect_face(data.face_data)
+    if not face_token:
+        raise HTTPException(400, "No face detected! Please retake in good lighting ❌")
+
+    # Store face token in database
+    student.face_data = json.dumps({
+        "face_token": face_token,
+        "image": data.face_data  # store original image too
+    })
     db.commit()
     return {"message": "Face registered successfully ✅"}
 
@@ -146,12 +118,30 @@ def verify_face(data: FaceVerifyInput, db: Session = Depends(get_db)):
     if not student:
         raise HTTPException(404, "Student not found ❌")
     if not student.face_data:
-        raise HTTPException(400, "No face registered ❌")
+        raise HTTPException(400, "No face registered. Please register face first ❌")
+
+    # Get stored face token
+    try:
+        stored = json.loads(student.face_data)
+        stored_token = stored.get("face_token")
+    except:
+        raise HTTPException(400, "Invalid face data. Please re-register face ❌")
+
+    # Detect face in new image
+    new_token = detect_face(data.face_data)
+    if not new_token:
+        raise HTTPException(400, "No face detected! Try better lighting ❌")
+
+    # Compare faces using Face++
+    confidence = compare_faces(stored_token, new_token)
+    match = confidence >= 80  # 80% threshold for strict verification
+
+    print(f"[Face++] {student.roll_no} → confidence: {confidence:.1f}% → {'✅' if match else '❌'}")
+
     return {
-        "match": True,
-        "confidence": 100,
-        "stored_face": student.face_data,
-        "message": "Face data retrieved ✅"
+        "match":      match,
+        "confidence": round(confidence, 1),
+        "message":    f"Face matched ✅ ({confidence:.1f}% confidence)" if match else f"Face not matched ❌ ({confidence:.1f}%)"
     }
 
 # ── Get Face Status ────────────────────────────────────────
