@@ -5,8 +5,12 @@ from models import Timetable, Subject
 from pydantic import BaseModel
 from typing import List
 import datetime
+import pytz
 
 router = APIRouter()
+
+# ── IST timezone ──────────────────────────────────────────
+IST = pytz.timezone('Asia/Kolkata')
 
 DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 
@@ -30,7 +34,6 @@ def add_timetable(data: TimetableInput, db: Session = Depends(get_db)):
     if data.day not in DAYS:
         raise HTTPException(status_code=400, detail=f"Invalid day. Use: {', '.join(DAYS)}")
 
-    # Check if slot already exists for this subject+day
     existing = db.query(Timetable).filter(
         Timetable.subject_id == data.subject_id,
         Timetable.day        == data.day
@@ -71,17 +74,17 @@ def get_all_timetable(db: Session = Depends(get_db)):
 
 @router.get("/timetable")
 def get_timetable(db: Session = Depends(get_db)):
-    entries = db.query(Timetable).all()
+    entries  = db.query(Timetable).all()
     subjects = db.query(Subject).all()
-    subMap = {s.id: s.name for s in subjects}
+    subMap   = {s.id: s.name for s in subjects}
     return [
         {
-            "id": e.id,
-            "subject_id": e.subject_id,
+            "id":           e.id,
+            "subject_id":   e.subject_id,
             "subject_name": subMap.get(e.subject_id, "Unknown"),
-            "day": e.day,
-            "start_time": e.start_time,
-            "end_time": e.end_time
+            "day":          e.day,
+            "start_time":   e.start_time,
+            "end_time":     e.end_time
         }
         for e in entries
     ]
@@ -103,16 +106,18 @@ def get_subject_timetable(subject_id: int, db: Session = Depends(get_db)):
         for e in entries
     ]
 
-# ─── Get Today's Timetable ────────────────────────────────
+# ─── Get Today's Timetable (IST) ─────────────────────────
 
 @router.get("/today")
 def get_today_timetable(db: Session = Depends(get_db)):
-    today   = datetime.datetime.now().strftime("%A")  # e.g. "Monday"
+    now_ist = datetime.datetime.now(IST)          # 👈 IST time
+    today   = now_ist.strftime("%A")              # e.g. "Monday"
     entries = db.query(Timetable).filter(Timetable.day == today).all()
-    subjects= db.query(Subject).all()
+    subjects = db.query(Subject).all()
     subMap  = {s.id: s.name for s in subjects}
     return {
-        "today": today,
+        "today":        today,
+        "current_time": now_ist.strftime("%H:%M"),  # 👈 send IST time to frontend for debugging
         "slots": [
             {
                 "id":           e.id,
