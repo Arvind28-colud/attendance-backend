@@ -44,7 +44,7 @@ class AssignTeacherInput(BaseModel):
     teacher_id: int
 
 class HolidayInput(BaseModel):
-    date:       str          # DD/MM/YYYY
+    date:       str          #DD-MM-YYYY
     reason:     str
     admin_id:   Optional[int] = None
 
@@ -210,9 +210,9 @@ def mark_holiday(data: HolidayInput, db: Session = Depends(get_db)):
 
     # Validate date is today or future only
     try:
-        holiday_date = datetime.datetime.strptime(data.date, "%d/%m/%Y").date()
+        holiday_date = datetime.datetime.strptime(data.date, "%d-%m-%Y").date()
     except ValueError:
-        raise HTTPException(400, "Invalid date format. Use DD/MM/YYYY ❌")
+        raise HTTPException(400, "Invalid date format. Use DD-MM-YYYY ❌")
 
     if holiday_date < datetime.date.today():
         raise HTTPException(400, "Cannot mark past dates as holiday ❌")
