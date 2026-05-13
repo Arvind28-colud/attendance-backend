@@ -166,7 +166,7 @@ def get_subject_attendance(student_id: int, subject_id: int,
         "warning":       warning,
         "records": [
             {
-                "date":       r.date.strftime("%Y-%m-%d %H:%M"),
+                "date":       r.date.strftime("%Y-%m-%d %H:%M") if r.date else None,
                 "is_present": r.is_present
             } for r in records
         ]
