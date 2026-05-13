@@ -1,31 +1,36 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Attendance, Student, Subject, Timetable, Holiday, Settings
+from models import Attendance, Student, Subject, Timetable, Course
 from pydantic import BaseModel
-from typing import Optional
 import datetime
+import pytz
 
 router = APIRouter()
 
+# ── IST timezone ──────────────────────────────────────────
+IST = pytz.timezone('Asia/Kolkata')
+
 class MarkInput(BaseModel):
-    student_id:  int
-    subject_id:  int
-    gps_lat:     float
-    gps_lng:     float
-    face_ok:     bool
-    face_image:  Optional[str] = None
-    verify_only: Optional[bool] = False
+    student_id: int
+    subject_id: int
+    gps_lat:    float
+    gps_lng:    float
+    face_ok:    bool
 
-# ── Helpers ────────────────────────────────────────────────
+# ── Helper: current IST date string ───────────────────────
+def now_ist_str() -> str:
+    return datetime.datetime.now(IST).strftime("%d-%m-%Y %H:%M")  # "DD-MM-YYYY HH:MM"
 
-def today_ddmmyyyy():
-    return datetime.datetime.now().strftime("%d/%m/%Y")
+def today_ist_str() -> str:
+    return datetime.datetime.now(IST).strftime("%d-%m-%Y")  # "DD-MM-YYYY"
+
+# ─── Check Timetable Window (IST) ────────────────────────
 
 def check_timetable(subject_id: int, db: Session):
-    now     = datetime.datetime.now()
-    today   = now.strftime("%A")
-    current = now.strftime("%H:%M")
+    now_ist = datetime.datetime.now(IST)
+    today   = now_ist.strftime("%A")
+    current = now_ist.strftime("%H:%M")
 
     slot = db.query(Timetable).filter(
         Timetable.subject_id == subject_id,
@@ -48,86 +53,38 @@ def check_timetable(subject_id: int, db: Session):
     return {"allowed": False,
             "message": f"❌ Attendance window: {w_start}–{w_end}. Now: {current}"}
 
-# ── Mark Attendance ────────────────────────────────────────
+# ─── Mark Attendance ──────────────────────────────────────
 
 @router.post("/mark")
 def mark_attendance(data: MarkInput, db: Session = Depends(get_db)):
     if not data.face_ok:
         raise HTTPException(400, "Face verification failed ❌")
 
-    # Face verify only — real DeepFace recognition
-    if data.verify_only:
-        student = db.query(Student).filter(Student.id == data.student_id).first()
-        if not student:
-            raise HTTPException(404, "Student not found ❌")
-        if not student.face_data:
-            raise HTTPException(400, "No face registered ❌")
-        from routes.auth import get_face_embedding, str_to_embedding, cosine_similarity
-        try:
-            incoming   = get_face_embedding(data.face_image, f"att_verify_{student.id}.jpg")
-            stored     = str_to_embedding(student.face_data)
-            similarity = cosine_similarity(stored, incoming)
-            match      = similarity >= 0.7
-            return {
-                "face_match": match,
-                "verified":   match,
-                "confidence": round(similarity * 100, 1),
-                "message":    "Face matched ✅" if match else "Face not matched ❌"
-            }
-        except Exception as e:
-            return {"face_match": False, "verified": False, "message": "No face detected ❌"}
-
-    today = today_ddmmyyyy()
-
-    # Block if classes haven't started yet
-    settings = db.query(Settings).filter(Settings.id == 1).first()
-    if not settings or not settings.semester_start_date:
-        raise HTTPException(400, "Classes have not started yet. Admin hasn't set the semester start date ❌")
-    try:
-        import datetime as dt
-        start = dt.datetime.strptime(settings.semester_start_date, "%d/%m/%Y").date()
-        if dt.date.today() < start:
-            raise HTTPException(400, f"Classes start on {settings.semester_start_date}. Attendance not allowed yet ❌")
-        if settings.semester_end_date:
-            end = dt.datetime.strptime(settings.semester_end_date, "%d/%m/%Y").date()
-            if dt.date.today() > end:
-                raise HTTPException(400, f"Semester ended on {settings.semester_end_date} ❌")
-    except HTTPException:
-        raise
-    except:
-        pass
-
-    # Block if today is a holiday
-    holiday = db.query(Holiday).filter(Holiday.date == today).first()
-    if holiday:
-        raise HTTPException(400, f"Today is a holiday — {holiday.reason} 🎉 No attendance today!")
-
     time_check = check_timetable(data.subject_id, db)
     if not time_check["allowed"]:
         raise HTTPException(400, time_check["message"])
 
+    # Check duplicate using date string prefix
+    today_str = today_ist_str()
     existing = db.query(Attendance).filter(
         Attendance.student_id == data.student_id,
         Attendance.subject_id == data.subject_id,
-        Attendance.date       == today
+        Attendance.date.like(f"{today_str}%")
     ).first()
     if existing:
         raise HTTPException(400, "Attendance already marked today ❌")
 
-    # Fetch names to store beside IDs
+    # Fetch names to populate denormalized columns
     student = db.query(Student).filter(Student.id == data.student_id).first()
     subject = db.query(Subject).filter(Subject.id == data.subject_id).first()
 
-    if not student: raise HTTPException(404, "Student not found ❌")
-    if not subject: raise HTTPException(404, "Subject not found ❌")
-
     record = Attendance(
         student_id   = data.student_id,
-        student_name = student.name,
+        student_name = student.name if student else None,
         subject_id   = data.subject_id,
-        subject_name = subject.name,
-        date         = today,
-        is_present   = "Present",
+        subject_name = subject.name if subject else None,
+        date         = now_ist_str(),  # ✅ "DD/MM/YYYY HH:MM" — update col to String(20) if needed
+        is_present   = "Present",      # ✅ matches Column(String(10))
         gps_lat      = data.gps_lat,
         gps_lng      = data.gps_lng
     )
@@ -135,15 +92,15 @@ def mark_attendance(data: MarkInput, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Attendance marked successfully ✅"}
 
-# ── Auto Mark Absent ───────────────────────────────────────
+# ─── Auto Mark Absent (IST) ───────────────────────────────
 
 @router.post("/auto-absent")
 def auto_mark_absent(db: Session = Depends(get_db)):
-    now     = datetime.datetime.now()
-    today   = now.strftime("%A")
-    current = now.strftime("%H:%M")
-    date    = today_ddmmyyyy()
-    marked  = []
+    now_ist   = datetime.datetime.now(IST)
+    today     = now_ist.strftime("%A")
+    current   = now_ist.strftime("%H:%M")
+    today_str = today_ist_str()
+    marked    = []
 
     slots = db.query(Timetable).filter(Timetable.day == today).all()
 
@@ -156,7 +113,8 @@ def auto_mark_absent(db: Session = Depends(get_db)):
             continue
 
         subject = db.query(Subject).filter(Subject.id == slot.subject_id).first()
-        if not subject: continue
+        if not subject:
+            continue
 
         students = db.query(Student).filter(
             Student.course_id == subject.course_id
@@ -166,21 +124,25 @@ def auto_mark_absent(db: Session = Depends(get_db)):
             existing = db.query(Attendance).filter(
                 Attendance.student_id == student.id,
                 Attendance.subject_id == slot.subject_id,
-                Attendance.date       == date
+                Attendance.date.like(f"{today_str}%")
             ).first()
 
             if not existing:
-                db.add(Attendance(
+                absent_record = Attendance(
                     student_id   = student.id,
                     student_name = student.name,
                     subject_id   = slot.subject_id,
                     subject_name = subject.name,
-                    date         = date,
-                    is_present   = "Absent",
+                    date         = now_ist_str(),  # ✅ string format
+                    is_present   = "Absent",        # ✅ matches Column(String(10))
                     gps_lat      = None,
                     gps_lng      = None
-                ))
-                marked.append({"student": student.name, "subject": subject.name})
+                )
+                db.add(absent_record)
+                marked.append({
+                    "student": student.name,
+                    "subject": subject.name
+                })
 
     db.commit()
     return {
@@ -188,7 +150,7 @@ def auto_mark_absent(db: Session = Depends(get_db)):
         "marked":  marked
     }
 
-# ── Get Student Attendance for a Subject ──────────────────
+# ─── Get Student Attendance for Subject ───────────────────
 
 @router.get("/student/{student_id}/subject/{subject_id}")
 def get_subject_attendance(student_id: int, subject_id: int,
@@ -200,33 +162,37 @@ def get_subject_attendance(student_id: int, subject_id: int,
     records = db.query(Attendance).filter(
         Attendance.student_id == student_id,
         Attendance.subject_id == subject_id
-    ).order_by(Attendance.date.desc()).all()
+    ).all()
 
-    total_classes = subject.total_classes or 68
+    total_classes = subject.total_classes or 0
+    classes_held  = len(records)
     present       = sum(1 for r in records if r.is_present == "Present")
-    absent        = sum(1 for r in records if r.is_present == "Absent")
-    percent       = round((present / total_classes) * 100, 1) if total_classes > 0 else 0
+    absent        = classes_held - present
+    denom         = total_classes if total_classes > 0 else classes_held
+    percent       = round((present / denom) * 100, 1) if denom > 0 else 0
 
-    # Classes needed to reach 75%
-    needed_75 = max(0, int((0.75 * total_classes - present) / 0.25)) if percent < 75 else 0
+    warning = None
+    if percent < 75 and denom > 0:
+        warning = f"⚠️ Only {percent}% attendance. Minimum required is 75%"
 
     return {
         "subject_id":    subject_id,
         "subject_name":  subject.name,
         "total_classes": total_classes,
+        "classes_held":  classes_held,
         "present":       present,
         "absent":        absent,
         "percent":       percent,
-        "needed_75":     needed_75,
+        "warning":       warning,
         "records": [
             {
-                "date":       r.date,           # already DD/MM/YYYY
-                "is_present": r.is_present      # "Present" or "Absent"
+                "date":   r.date if r.date else None,
+                "status": r.is_present  # already "Present" or "Absent"
             } for r in records
         ]
     }
 
-# ── Get All Attendance for a Student ──────────────────────
+# ─── Get All Student Attendance ───────────────────────────
 
 @router.get("/student/{student_id}")
 def get_student_attendance(student_id: int, db: Session = Depends(get_db)):
@@ -236,15 +202,14 @@ def get_student_attendance(student_id: int, db: Session = Depends(get_db)):
     return {
         "records": [
             {
-                "date":         r.date,
-                "is_present":   r.is_present,
-                "subject_id":   r.subject_id,
-                "subject_name": r.subject_name
+                "date":       r.date if r.date else None,
+                "is_present": r.is_present,
+                "subject_id": r.subject_id
             } for r in records
         ]
     }
 
-# ── Teacher View: Subject Attendance ──────────────────────
+# ─── Get Subject Attendance (teacher view) ────────────────
 
 @router.get("/subject/{subject_id}")
 def get_subject_attendance_teacher(subject_id: int,
@@ -256,15 +221,14 @@ def get_subject_attendance_teacher(subject_id: int,
         "total_records": len(records),
         "records": [
             {
-                "student_id":   r.student_id,
-                "student_name": r.student_name,
-                "date":         r.date,
-                "is_present":   r.is_present
+                "student_id": r.student_id,
+                "date":       r.date if r.date else None,
+                "is_present": r.is_present
             } for r in records
         ]
     }
 
-# ── Timetable for Subject ─────────────────────────────────
+# ─── Get Timetable for Subject ────────────────────────────
 
 @router.get("/timetable/{subject_id}")
 def get_subject_timetable(subject_id: int, db: Session = Depends(get_db)):

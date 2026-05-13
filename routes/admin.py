@@ -44,7 +44,7 @@ class AssignTeacherInput(BaseModel):
     teacher_id: int
 
 class HolidayInput(BaseModel):
-    date:       str          # DD/MM/YYYY
+    date:       str          #DD-MM-YYYY
     reason:     str
     admin_id:   Optional[int] = None
 
@@ -55,8 +55,14 @@ DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 @router.post("/login")
 def admin_login(data: AdminLoginInput, db: Session = Depends(get_db)):
     admin = db.query(Admin).filter(Admin.email == data.email).first()
-    if not admin or not bcrypt.verify(data.password, admin.password):
+    if not admin:
         raise HTTPException(401, "Invalid admin credentials ❌")
+    try:
+        pwd = data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+        if not bcrypt.verify(pwd, admin.password):
+            raise HTTPException(401, "Invalid admin credentials ❌")
+    except Exception as e:
+        raise HTTPException(500, f"Auth error: {str(e)}")
     return {"message": "Admin login successful ✅",
             "admin_id": admin.id, "name": admin.name, "email": admin.email}
 
@@ -204,9 +210,9 @@ def mark_holiday(data: HolidayInput, db: Session = Depends(get_db)):
 
     # Validate date is today or future only
     try:
-        holiday_date = datetime.datetime.strptime(data.date, "%d/%m/%Y").date()
+        holiday_date = datetime.datetime.strptime(data.date, "%d-%m-%Y").date()
     except ValueError:
-        raise HTTPException(400, "Invalid date format. Use DD/MM/YYYY ❌")
+        raise HTTPException(400, "Invalid date format. Use DD-MM-YYYY ❌")
 
     if holiday_date < datetime.date.today():
         raise HTTPException(400, "Cannot mark past dates as holiday ❌")
