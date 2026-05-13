@@ -21,7 +21,7 @@ class MarkInput(BaseModel):
 # ─── Check Timetable Window (IST) ────────────────────────
 
 def check_timetable(subject_id: int, db: Session):
-    now_ist = datetime.datetime.now(IST)          # 👈 IST time
+    now_ist = datetime.datetime.now(IST)
     today   = now_ist.strftime("%A")
     current = now_ist.strftime("%H:%M")
 
@@ -57,7 +57,7 @@ def mark_attendance(data: MarkInput, db: Session = Depends(get_db)):
     if not time_check["allowed"]:
         raise HTTPException(400, time_check["message"])
 
-    today_ist = datetime.datetime.now(IST).date()   # 👈 IST date
+    today_ist = datetime.datetime.now(IST).date()
     existing = db.query(Attendance).filter(
         Attendance.student_id == data.student_id,
         Attendance.subject_id == data.subject_id,
@@ -70,6 +70,7 @@ def mark_attendance(data: MarkInput, db: Session = Depends(get_db)):
         student_id = data.student_id,
         subject_id = data.subject_id,
         is_present = True,
+        date       = datetime.datetime.now(IST),  # ✅ always set date
         gps_lat    = data.gps_lat,
         gps_lng    = data.gps_lng
     )
@@ -80,7 +81,7 @@ def mark_attendance(data: MarkInput, db: Session = Depends(get_db)):
 
 @router.post("/auto-absent")
 def auto_mark_absent(db: Session = Depends(get_db)):
-    now_ist = datetime.datetime.now(IST)            # 👈 IST time
+    now_ist = datetime.datetime.now(IST)
     today   = now_ist.strftime("%A")
     current = now_ist.strftime("%H:%M")
     date    = now_ist.date()
@@ -115,6 +116,7 @@ def auto_mark_absent(db: Session = Depends(get_db)):
                     student_id = student.id,
                     subject_id = slot.subject_id,
                     is_present = False,
+                    date       = datetime.datetime.now(IST),  # ✅ always set date
                     gps_lat    = None,
                     gps_lng    = None
                 )
@@ -166,8 +168,8 @@ def get_subject_attendance(student_id: int, subject_id: int,
         "warning":       warning,
         "records": [
             {
-                "date": record.date.strftime("%Y-%m-%d") if record.date else None,
-                "status": record.status,
+                "date":   r.date.strftime("%Y-%m-%d") if r.date else None,  # ✅ fixed var name + null guard
+                "status": "present" if r.is_present else "absent",          # ✅ fixed: no r.status field
             } for r in records
         ]
     }
@@ -182,7 +184,7 @@ def get_student_attendance(student_id: int, db: Session = Depends(get_db)):
     return {
         "records": [
             {
-                "date":       r.date.strftime("%Y-%m-%d %H:%M"),
+                "date":       r.date.strftime("%Y-%m-%d %H:%M") if r.date else None,  # ✅ null guard
                 "is_present": r.is_present,
                 "subject_id": r.subject_id
             } for r in records
@@ -202,7 +204,7 @@ def get_subject_attendance_teacher(subject_id: int,
         "records": [
             {
                 "student_id": r.student_id,
-                "date":       r.date.strftime("%Y-%m-%d %H:%M"),
+                "date":       r.date.strftime("%Y-%m-%d %H:%M") if r.date else None,  # ✅ null guard
                 "is_present": r.is_present
             } for r in records
         ]
