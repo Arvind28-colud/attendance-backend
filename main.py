@@ -14,7 +14,11 @@ app = FastAPI(title="College Attendance System API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # ✅ Allows any origin — works with ngrok + localhost
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://attendance-311xlsu7o-arvind28-coluds-projects.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
