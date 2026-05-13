@@ -20,12 +20,10 @@ class MarkInput(BaseModel):
 
 # ── Helper: current IST date string ───────────────────────
 def now_ist_str() -> str:
-    """Returns current IST time as DD/MM/YYYY HH:MM — fits String(20)"""
-    return datetime.datetime.now(IST).strftime("%d/%m/%Y %H:%M")
+    return datetime.datetime.now(IST).strftime("%d-%m-%Y %H:%M")  # "DD-MM-YYYY HH:MM"
 
 def today_ist_str() -> str:
-    """Returns today's IST date as DD/MM/YYYY — fits String(12)"""
-    return datetime.datetime.now(IST).strftime("%d/%m/%Y")
+    return datetime.datetime.now(IST).strftime("%d-%m-%Y")  # "DD-MM-YYYY"
 
 # ─── Check Timetable Window (IST) ────────────────────────
 
