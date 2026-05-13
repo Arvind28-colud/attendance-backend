@@ -18,6 +18,15 @@ class MarkInput(BaseModel):
     gps_lng:    float
     face_ok:    bool
 
+# ── Helper: current IST date string ───────────────────────
+def now_ist_str() -> str:
+    """Returns current IST time as DD/MM/YYYY HH:MM — fits String(20)"""
+    return datetime.datetime.now(IST).strftime("%d/%m/%Y %H:%M")
+
+def today_ist_str() -> str:
+    """Returns today's IST date as DD/MM/YYYY — fits String(12)"""
+    return datetime.datetime.now(IST).strftime("%d/%m/%Y")
+
 # ─── Check Timetable Window (IST) ────────────────────────
 
 def check_timetable(subject_id: int, db: Session):
@@ -57,48 +66,57 @@ def mark_attendance(data: MarkInput, db: Session = Depends(get_db)):
     if not time_check["allowed"]:
         raise HTTPException(400, time_check["message"])
 
-    today_ist = datetime.datetime.now(IST).date()
+    # Check duplicate using date string prefix
+    today_str = today_ist_str()
     existing = db.query(Attendance).filter(
         Attendance.student_id == data.student_id,
         Attendance.subject_id == data.subject_id,
-        Attendance.date >= datetime.datetime.combine(today_ist, datetime.time.min)
+        Attendance.date.like(f"{today_str}%")
     ).first()
     if existing:
         raise HTTPException(400, "Attendance already marked today ❌")
 
+    # Fetch names to populate denormalized columns
+    student = db.query(Student).filter(Student.id == data.student_id).first()
+    subject = db.query(Subject).filter(Subject.id == data.subject_id).first()
+
     record = Attendance(
-        student_id = data.student_id,
-        subject_id = data.subject_id,
-        is_present = True,
-        date       = datetime.datetime.now(IST),  # ✅ always set date
-        gps_lat    = data.gps_lat,
-        gps_lng    = data.gps_lng
+        student_id   = data.student_id,
+        student_name = student.name if student else None,
+        subject_id   = data.subject_id,
+        subject_name = subject.name if subject else None,
+        date         = now_ist_str(),  # ✅ "DD/MM/YYYY HH:MM" — update col to String(20) if needed
+        is_present   = "Present",      # ✅ matches Column(String(10))
+        gps_lat      = data.gps_lat,
+        gps_lng      = data.gps_lng
     )
-    db.add(record); db.commit()
+    db.add(record)
+    db.commit()
     return {"message": "Attendance marked successfully ✅"}
 
 # ─── Auto Mark Absent (IST) ───────────────────────────────
 
 @router.post("/auto-absent")
 def auto_mark_absent(db: Session = Depends(get_db)):
-    now_ist = datetime.datetime.now(IST)
-    today   = now_ist.strftime("%A")
-    current = now_ist.strftime("%H:%M")
-    date    = now_ist.date()
-    marked  = []
+    now_ist   = datetime.datetime.now(IST)
+    today     = now_ist.strftime("%A")
+    current   = now_ist.strftime("%H:%M")
+    today_str = today_ist_str()
+    marked    = []
 
     slots = db.query(Timetable).filter(Timetable.day == today).all()
 
     for slot in slots:
-        fmt   = "%H:%M"
-        end   = datetime.datetime.strptime(slot.end_time, fmt)
+        fmt        = "%H:%M"
+        end        = datetime.datetime.strptime(slot.end_time, fmt)
         window_end = (end + datetime.timedelta(minutes=5)).strftime(fmt)
 
         if current <= window_end:
             continue
 
         subject = db.query(Subject).filter(Subject.id == slot.subject_id).first()
-        if not subject: continue
+        if not subject:
+            continue
 
         students = db.query(Student).filter(
             Student.course_id == subject.course_id
@@ -108,17 +126,19 @@ def auto_mark_absent(db: Session = Depends(get_db)):
             existing = db.query(Attendance).filter(
                 Attendance.student_id == student.id,
                 Attendance.subject_id == slot.subject_id,
-                Attendance.date >= datetime.datetime.combine(date, datetime.time.min)
+                Attendance.date.like(f"{today_str}%")
             ).first()
 
             if not existing:
                 absent_record = Attendance(
-                    student_id = student.id,
-                    subject_id = slot.subject_id,
-                    is_present = False,
-                    date       = datetime.datetime.now(IST),  # ✅ always set date
-                    gps_lat    = None,
-                    gps_lng    = None
+                    student_id   = student.id,
+                    student_name = student.name,
+                    subject_id   = slot.subject_id,
+                    subject_name = subject.name,
+                    date         = now_ist_str(),  # ✅ string format
+                    is_present   = "Absent",        # ✅ matches Column(String(10))
+                    gps_lat      = None,
+                    gps_lng      = None
                 )
                 db.add(absent_record)
                 marked.append({
@@ -148,7 +168,7 @@ def get_subject_attendance(student_id: int, subject_id: int,
 
     total_classes = subject.total_classes or 0
     classes_held  = len(records)
-    present       = sum(1 for r in records if r.is_present)
+    present       = sum(1 for r in records if r.is_present == "Present")
     absent        = classes_held - present
     denom         = total_classes if total_classes > 0 else classes_held
     percent       = round((present / denom) * 100, 1) if denom > 0 else 0
@@ -168,8 +188,8 @@ def get_subject_attendance(student_id: int, subject_id: int,
         "warning":       warning,
         "records": [
             {
-                "date":   r.date.strftime("%Y-%m-%d") if r.date else None,  # ✅ fixed var name + null guard
-                "status": "present" if r.is_present else "absent",          # ✅ fixed: no r.status field
+                "date":   r.date if r.date else None,
+                "status": r.is_present  # already "Present" or "Absent"
             } for r in records
         ]
     }
@@ -184,7 +204,7 @@ def get_student_attendance(student_id: int, db: Session = Depends(get_db)):
     return {
         "records": [
             {
-                "date":       r.date.strftime("%Y-%m-%d %H:%M") if r.date else None,  # ✅ null guard
+                "date":       r.date if r.date else None,
                 "is_present": r.is_present,
                 "subject_id": r.subject_id
             } for r in records
@@ -204,7 +224,7 @@ def get_subject_attendance_teacher(subject_id: int,
         "records": [
             {
                 "student_id": r.student_id,
-                "date":       r.date.strftime("%Y-%m-%d %H:%M") if r.date else None,  # ✅ null guard
+                "date":       r.date if r.date else None,
                 "is_present": r.is_present
             } for r in records
         ]
