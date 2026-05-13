@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 import models
-from routes import auth, attendance, gps, reset, admin, timetable
+from routes import auth, attendance, gps, reset, admin, timetable, assignments
 import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -32,12 +32,13 @@ app.add_middleware(
 )
 
 # ── API Routes ─────────────────────────────────────────────
-app.include_router(auth.router,       prefix="/auth",       tags=["Auth"])
-app.include_router(attendance.router, prefix="/attendance", tags=["Attendance"])
-app.include_router(gps.router,        prefix="/gps",        tags=["GPS"])
-app.include_router(reset.router,      prefix="/reset",      tags=["Reset Password"])
-app.include_router(admin.router,      prefix="/admin",      tags=["Admin"])
-app.include_router(timetable.router,  prefix="/timetable",  tags=["Timetable"])
+app.include_router(auth.router,         prefix="/auth",        tags=["Auth"])
+app.include_router(attendance.router,   prefix="/attendance",  tags=["Attendance"])
+app.include_router(gps.router,          prefix="/gps",         tags=["GPS"])
+app.include_router(reset.router,        prefix="/reset",       tags=["Reset Password"])
+app.include_router(admin.router,        prefix="/admin",       tags=["Admin"])
+app.include_router(timetable.router,    prefix="/timetable",   tags=["Timetable"])
+app.include_router(assignments.router,  prefix="/work",        tags=["Assignments & Lab Records"])
 
 
 # ── Auto-Absent Scheduler ─────────────────────────────────
