@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from database import Base
+import datetime
 
 class Admin(Base):
     __tablename__ = "admins"
@@ -38,19 +39,16 @@ class Teacher(Base):
 
 class Subject(Base):
     __tablename__ = "subjects"
-    id               = Column(Integer, primary_key=True, index=True)
-    name             = Column(String(100))
-    course_id        = Column(Integer, ForeignKey("courses.id"))
-    course_name      = Column(String(100))           # beside course_id
-    teacher_id       = Column(Integer, ForeignKey("teachers.id"), nullable=True)
-    teacher_name     = Column(String(100))           # beside teacher_id
-    semester         = Column(Integer, default=1)
-    classes_per_week = Column(Integer, default=4)
-    total_classes    = Column(Integer, default=68)
-    course           = relationship("Course",     back_populates="subjects")
-    teacher          = relationship("Teacher",    back_populates="subjects")
-    timetables       = relationship("Timetable",  back_populates="subject")
-    attendances      = relationship("Attendance", back_populates="subject")
+    id            = Column(Integer, primary_key=True, index=True)
+    name          = Column(String(100))
+    course_id     = Column(Integer, ForeignKey("courses.id"))
+    teacher_id    = Column(Integer, ForeignKey("teachers.id"), nullable=True)
+    total_classes = Column(Integer, default=0)
+    semester      = Column(Integer, default=1)   # ✅ 1 to 6
+    course        = relationship("Course",     back_populates="subjects")
+    teacher       = relationship("Teacher",    back_populates="subjects")
+    timetables    = relationship("Timetable",  back_populates="subject")
+    attendances   = relationship("Attendance", back_populates="subject")
 
 class Timetable(Base):
     __tablename__ = "timetable"
@@ -69,39 +67,48 @@ class Student(Base):
     roll_no       = Column(String(50),  unique=True)
     password      = Column(String(255))
     course_id     = Column(Integer, ForeignKey("courses.id"))
-    course_name   = Column(String(100))              # beside course_id
     year          = Column(String(20),  nullable=True)
     academic_year = Column(String(20),  nullable=True)
-    semester      = Column(Integer, default=1)
-    face_data     = Column(Text(length=4294967295), nullable=True)  # LONGTEXT
+    semester      = Column(Integer, default=1)   # ✅ 1 to 6
+    face_data     = Column(Text, nullable=True)
     course        = relationship("Course",     back_populates="students")
     attendances   = relationship("Attendance", back_populates="student")
 
 class Attendance(Base):
     __tablename__ = "attendance"
-    id           = Column(Integer, primary_key=True, index=True)
-    student_id   = Column(Integer, ForeignKey("students.id"))
-    student_name = Column(String(100))               # beside student_id
-    subject_id   = Column(Integer, ForeignKey("subjects.id"))
-    subject_name = Column(String(100))               # beside subject_id
-    date         = Column(String(12))                # DD/MM/YYYY
-    is_present   = Column(String(10), default="Absent")  # Present or Absent
-    gps_lat      = Column(Float, nullable=True)
-    gps_lng      = Column(Float, nullable=True)
-    student      = relationship("Student", back_populates="attendances")
-    subject      = relationship("Subject", back_populates="attendances")
-
-class Holiday(Base):
-    __tablename__ = "holidays"
     id         = Column(Integer, primary_key=True, index=True)
-    date       = Column(String(12), unique=True)     # DD/MM/YYYY
-    reason     = Column(String(200))
-    created_by = Column(Integer, ForeignKey("admins.id"), nullable=True)
+    student_id = Column(Integer, ForeignKey("students.id"))
+    subject_id = Column(Integer, ForeignKey("subjects.id"))
+    date       = Column(DateTime, default=datetime.datetime.now)
+    is_present = Column(Boolean, default=False)
+    gps_lat    = Column(Float, nullable=True)
+    gps_lng    = Column(Float, nullable=True)
+    student    = relationship("Student",  back_populates="attendances")
+    subject    = relationship("Subject",  back_populates="attendances")
 
-class Settings(Base):
-    __tablename__ = "settings"
-    id                  = Column(Integer, primary_key=True, default=1)
-    semester_start_date = Column(String(12), nullable=True)   # DD/MM/YYYY
-    semester_end_date   = Column(String(12), nullable=True)   # DD/MM/YYYY
-    academic_year       = Column(String(20), default='2025-2026')
-    current_semester    = Column(Integer, default=4)
+# ── Assignment: up to 4 per subject, teacher uploads title + due date ──
+class Assignment(Base):
+    __tablename__ = "assignments"
+    id           = Column(Integer, primary_key=True, index=True)
+    subject_id   = Column(Integer, ForeignKey("subjects.id"))
+    teacher_id   = Column(Integer, ForeignKey("teachers.id"))
+    title        = Column(String(200))
+    description  = Column(Text, nullable=True)
+    due_date     = Column(String(20))           # stored as "YYYY-MM-DD"
+    created_at   = Column(DateTime, default=datetime.datetime.now)
+    subject      = relationship("Subject")
+    teacher      = relationship("Teacher")
+
+# ── Lab Record: exactly 1 per subject per semester ─────────────────────
+class LabRecord(Base):
+    __tablename__ = "lab_records"
+    id           = Column(Integer, primary_key=True, index=True)
+    subject_id   = Column(Integer, ForeignKey("subjects.id"))
+    teacher_id   = Column(Integer, ForeignKey("teachers.id"))
+    semester     = Column(Integer)
+    title        = Column(String(200))
+    description  = Column(Text, nullable=True)
+    due_date     = Column(String(20))           # stored as "YYYY-MM-DD"
+    created_at   = Column(DateTime, default=datetime.datetime.now)
+    subject      = relationship("Subject")
+    teacher      = relationship("Teacher")
