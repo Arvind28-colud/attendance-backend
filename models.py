@@ -112,3 +112,10 @@ class LabRecord(Base):
     created_at   = Column(DateTime, default=datetime.datetime.now)
     subject      = relationship("Subject")
     teacher      = relationship("Teacher")
+# ── Holiday: used by admin route ───────────────────────────
+class Holiday(Base):
+    __tablename__ = "holidays"
+    id      = Column(Integer, primary_key=True, index=True)
+    date    = Column(String(20))        # "YYYY-MM-DD"
+    name    = Column(String(200))
+    created_at = Column(DateTime, default=datetime.datetime.now)
