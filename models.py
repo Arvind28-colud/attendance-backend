@@ -115,8 +115,6 @@ class LabRecord(Base):
 # ── Holiday: used by admin route ───────────────────────────
 class Holiday(Base):
     __tablename__ = "holidays"
-    id         = Column(Integer, primary_key=True, index=True)
-    date       = Column(String(20))        # "DD-MM-YYYY"
-    reason     = Column(String(200), nullable=True)
-    created_by = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=True, default=datetime.datetime.now)
+    id     = Column(Integer, primary_key=True, index=True)
+    date   = Column(String(20))
+    reason = Column(String(200), nullable=True)
