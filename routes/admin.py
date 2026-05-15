@@ -10,6 +10,28 @@ import datetime
 
 router = APIRouter()
 
+# ── Temporary schema fix — remove after running once ────────
+from sqlalchemy import text
+
+@router.get("/fix-holidays-schema")
+def fix_holidays_schema(db: Session = Depends(get_db)):
+    results = []
+    migrations = [
+        "ALTER TABLE holidays CHANGE COLUMN `name` `reason` VARCHAR(200) NULL",
+        "ALTER TABLE holidays ADD COLUMN `reason` VARCHAR(200) NULL",
+        "ALTER TABLE holidays ADD COLUMN `created_by` INT NULL",
+        "ALTER TABLE holidays ADD COLUMN `created_at` DATETIME NULL",
+    ]
+    for sql in migrations:
+        try:
+            db.execute(text(sql))
+            db.commit()
+            results.append(f"✅ {sql[:60]}")
+        except Exception as e:
+            results.append(f"⏭ skipped: {str(e)[:80]}")
+    return {"results": results, "message": "Done — remove this endpoint now"}
+
+
 # ── Input Models ───────────────────────────────────────────
 
 class AdminLoginInput(BaseModel):
