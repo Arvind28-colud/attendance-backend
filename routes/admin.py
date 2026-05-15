@@ -240,7 +240,7 @@ def mark_holiday(data: HolidayInput, db: Session = Depends(get_db)):
         raise HTTPException(400, "Cannot mark past dates as holiday ❌")
 
     # Save holiday
-    holiday = Holiday(date=data.date, reason=data.reason, created_by=data.admin_id)
+    holiday = Holiday(date=data.date, reason=data.reason)
     db.add(holiday)
 
     # Reduce total_classes by 1 for ALL subjects
