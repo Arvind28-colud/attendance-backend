@@ -118,5 +118,5 @@ class Holiday(Base):
     id         = Column(Integer, primary_key=True, index=True)
     date       = Column(String(20))        # "DD-MM-YYYY"
     reason     = Column(String(200), nullable=True)
-    created_by = Column(Integer, nullable=True)   # admin_id
-    created_at = Column(DateTime, default=datetime.datetime.now)
+    created_by = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=True, default=datetime.datetime.now)
