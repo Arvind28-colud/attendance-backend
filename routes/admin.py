@@ -467,8 +467,10 @@ def get_students(db: Session = Depends(get_db)):
         "name":        s.name,
         "roll_no":     s.roll_no,
         "email":       s.email,
-        "course_name": cMap.get(s.course_id, ""),
-        "semester":    s.semester or 1
+        "course_id":   s.course_id,
+        "course_name": cMap.get(s.course_id, "Unassigned"),
+        "semester":    s.semester or 1,
+        "group":       cMap.get(s.course_id, "Unassigned"),
     } for s in students]
 
 @router.delete("/student/{id}")
@@ -484,20 +486,43 @@ def remove_student(id: int, db: Session = Depends(get_db)):
 def get_course_attendance(course_id: int, db: Session = Depends(get_db)):
     students = db.query(Student).filter(Student.course_id == course_id).all()
     subjects = db.query(Subject).filter(Subject.course_id == course_id).all()
-    total_classes = sum(s.total_classes for s in subjects)
-    result = []
+    course   = db.query(Course).filter(Course.id == course_id).first()
+    result   = []
     for s in students:
-        present = sum(1 for a in s.attendances if a.is_present == "Present")
-        pct     = round((present / total_classes) * 100, 1) if total_classes > 0 else 0
+        subject_rows = []
+        overall_present = 0
+        overall_total   = 0
+        for sub in subjects:
+            att     = [a for a in s.attendances if a.subject_id == sub.id]
+            present = sum(1 for a in att if a.is_present == "Present")
+            total   = sub.total_classes or 0
+            pct     = round((present / total) * 100, 1) if total > 0 else 0
+            overall_present += present
+            overall_total   += total
+            subject_rows.append({
+                "subject_id":    sub.id,
+                "subject_name":  sub.name,
+                "present":       present,
+                "total_classes": total,
+                "percent":       pct,
+            })
+        overall_pct = round((overall_present / overall_total) * 100, 1) if overall_total > 0 else 0
         result.append({
-            "student_id":    s.id,
-            "name":          s.name,
-            "roll_no":       s.roll_no,
-            "present":       present,
-            "total_classes": total_classes,
-            "percent":       pct
+            "student_id":      s.id,
+            "name":            s.name,
+            "roll_no":         s.roll_no,
+            "semester":        s.semester,
+            "overall_present": overall_present,
+            "overall_total":   overall_total,
+            "overall_percent": overall_pct,
+            "subjects":        subject_rows,
         })
-    return result
+    result.sort(key=lambda x: x["roll_no"] or "")
+    return {
+        "course_name": course.name if course else "",
+        "students":    result,
+        "subjects":    [{ "id": sub.id, "name": sub.name, "total": sub.total_classes } for sub in subjects],
+    }
 
 # ── Overview Stats ─────────────────────────────────────────
 
