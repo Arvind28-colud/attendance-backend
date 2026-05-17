@@ -501,11 +501,9 @@ def get_semester_settings(db: Session = Depends(get_db)):
 def save_semester_settings(data: SemesterSettingsSchema, db: Session = Depends(get_db)):
     s = db.query(SemesterSettings).first()
     if s:
-        # update existing row
         s.semester_start_date = data.semester_start_date
         s.semester_end_date   = data.semester_end_date
     else:
-        # insert first time
         s = SemesterSettings(
             semester_start_date = data.semester_start_date,
             semester_end_date   = data.semester_end_date,
