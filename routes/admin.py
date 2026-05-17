@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from models import (Admin, Department, Course, Subject,
-                    Teacher, Student, Timetable, Attendance, Holiday)
+                    Teacher, Student, Timetable, Attendance, Holiday, SemesterSettings)
 from passlib.hash import bcrypt
 from pydantic import BaseModel
 from typing import Optional
@@ -480,21 +480,76 @@ def remove_student(id: int, db: Session = Depends(get_db)):
     db.delete(student); db.commit()
     return {"message": "Deleted ✅"}
 
+
+# ── Semester Settings ────────────────────────────────────────
+class SemesterSettingsSchema(BaseModel):
+    start_date:    str
+    end_date:      str
+    semester:      Optional[int] = None
+    academic_year: Optional[str] = None
+
+@router.get("/semester-settings")
+def get_semester_settings(db: Session = Depends(get_db)):
+    s = db.query(SemesterSettings).filter(SemesterSettings.is_active == True).first()
+    if not s:
+        return {"start_date": None, "end_date": None, "semester": None, "academic_year": None, "is_active": False}
+    return {
+        "id":            s.id,
+        "start_date":    s.start_date,
+        "end_date":      s.end_date,
+        "semester":      s.semester,
+        "academic_year": s.academic_year,
+        "is_active":     s.is_active,
+    }
+
+@router.post("/semester-settings")
+def save_semester_settings(data: SemesterSettingsSchema, db: Session = Depends(get_db)):
+    # Deactivate any existing
+    db.query(SemesterSettings).update({"is_active": False})
+    db.commit()
+    s = SemesterSettings(
+        start_date    = data.start_date,
+        end_date      = data.end_date,
+        semester      = data.semester,
+        academic_year = data.academic_year,
+        is_active     = True,
+    )
+    db.add(s); db.commit(); db.refresh(s)
+    return {"message": "Semester settings saved ✅", "id": s.id}
+
 # ── Attendance Report ──────────────────────────────────────
 
 @router.get("/attendance/course/{course_id}")
 def get_course_attendance(course_id: int, db: Session = Depends(get_db)):
+    from models import Attendance as AttModel
     students = db.query(Student).filter(Student.course_id == course_id).all()
     subjects = db.query(Subject).filter(Subject.course_id == course_id).all()
     course   = db.query(Course).filter(Course.id == course_id).first()
-    result   = []
+
+    # Pre-load all attendance records for these students + subjects in one query
+    student_ids = [s.id for s in students]
+    subject_ids = [sub.id for sub in subjects]
+    all_att = db.query(AttModel).filter(
+        AttModel.student_id.in_(student_ids),
+        AttModel.subject_id.in_(subject_ids)
+    ).all()
+
+    # Index: {(student_id, subject_id): [records]}
+    att_map = {}
+    for a in all_att:
+        key = (a.student_id, a.subject_id)
+        if key not in att_map:
+            att_map[key] = []
+        att_map[key].append(a)
+
+    result = []
     for s in students:
-        subject_rows = []
+        subject_rows    = []
         overall_present = 0
         overall_total   = 0
         for sub in subjects:
-            att     = [a for a in s.attendances if a.subject_id == sub.id]
-            present = sum(1 for a in att if a.is_present == "Present")
+            records = att_map.get((s.id, sub.id), [])
+            present = sum(1 for a in records if a.is_present == "Present")
             total   = sub.total_classes or 0
             pct     = round((present / total) * 100, 1) if total > 0 else 0
             overall_present += present
