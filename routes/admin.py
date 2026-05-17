@@ -483,10 +483,8 @@ def remove_student(id: int, db: Session = Depends(get_db)):
 
 # ── Semester Settings ────────────────────────────────────────
 class SemesterSettingsSchema(BaseModel):
-    start_date:    str
-    end_date:      str
-    semester:      Optional[int] = None
-    academic_year: Optional[str] = None
+    semester_start_date: str
+    semester_end_date:   str
 
 @router.get("/semester-settings")
 def get_semester_settings(db: Session = Depends(get_db)):
@@ -495,26 +493,26 @@ def get_semester_settings(db: Session = Depends(get_db)):
         return {"start_date": None, "end_date": None, "semester": None, "academic_year": None, "is_active": False}
     return {
         "id":            s.id,
-        "start_date":    s.start_date,
-        "end_date":      s.end_date,
-        "semester":      s.semester,
-        "academic_year": s.academic_year,
-        "is_active":     s.is_active,
+       "semester_start_date":  s.semester_start_date,
+        "semester_end_date":    s.semester_end_date,
     }
 
 @router.post("/semester-settings")
 def save_semester_settings(data: SemesterSettingsSchema, db: Session = Depends(get_db)):
-    # Deactivate any existing
-    db.query(SemesterSettings).update({"is_active": False})
+    s = db.query(SemesterSettings).first()
+    if s:
+        # update existing row
+        s.semester_start_date = data.semester_start_date
+        s.semester_end_date   = data.semester_end_date
+    else:
+        # insert first time
+        s = SemesterSettings(
+            semester_start_date = data.semester_start_date,
+            semester_end_date   = data.semester_end_date,
+        )
+        db.add(s)
     db.commit()
-    s = SemesterSettings(
-        start_date    = data.start_date,
-        end_date      = data.end_date,
-        semester      = data.semester,
-        academic_year = data.academic_year,
-        is_active     = True,
-    )
-    db.add(s); db.commit(); db.refresh(s)
+    db.refresh(s)
     return {"message": "Semester settings saved ✅", "id": s.id}
 
 # ── Attendance Report ──────────────────────────────────────
