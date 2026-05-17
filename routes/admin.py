@@ -66,9 +66,13 @@ class AssignTeacherInput(BaseModel):
     teacher_id: int
 
 class HolidayInput(BaseModel):
-    date:       str          #DD-MM-YYYY
-    reason:     str
-    admin_id:   Optional[int] = None
+    date:     str          # DD-MM-YYYY
+    reason:   str
+    admin_id: Optional[int] = None
+
+class SemesterSettingsSchema(BaseModel):
+    semester_start_date: str
+    semester_end_date:   str
 
 DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 
@@ -141,19 +145,15 @@ def add_subject(data: SubjectInput, db: Session = Depends(get_db)):
     course  = db.query(Course).filter(Course.id == data.course_id).first()
     teacher = db.query(Teacher).filter(Teacher.id == data.teacher_id).first() if data.teacher_id else None
 
-    # Calculate total_classes = 68 minus holidays already marked
     holidays_count = db.query(Holiday).count()
     total_classes  = max(0, 68 - holidays_count)
 
     subject = Subject(
-        name             = data.name,
-        course_id        = data.course_id,
-        course_name      = course.name if course else "",
-        teacher_id       = data.teacher_id,
-        teacher_name     = teacher.name if teacher else "Not assigned",
-        semester         = data.semester or 1,
-        classes_per_week = 4,
-        total_classes    = total_classes
+        name          = data.name,
+        course_id     = data.course_id,
+        teacher_id    = data.teacher_id,
+        semester      = data.semester or 1,
+        total_classes = total_classes,
     )
     db.add(subject); db.commit(); db.refresh(subject)
     return {"message": f"Subject '{data.name}' added ✅", "id": subject.id,
@@ -195,21 +195,21 @@ def assign_teacher(data: AssignTeacherInput, db: Session = Depends(get_db)):
     subject = db.query(Subject).filter(Subject.id == data.subject_id).first()
     if not subject: raise HTTPException(404, "Subject not found ❌")
     teacher = db.query(Teacher).filter(Teacher.id == data.teacher_id).first()
-    subject.teacher_id   = data.teacher_id
-    subject.teacher_name = teacher.name if teacher else "Not assigned"
+    subject.teacher_id = data.teacher_id
     db.commit()
     return {"message": "Teacher assigned ✅"}
 
 @router.get("/subjects/teacher/{teacher_id}")
 def get_subjects_by_teacher(teacher_id: int, db: Session = Depends(get_db)):
     subjects = db.query(Subject).filter(Subject.teacher_id == teacher_id).all()
+    courses  = db.query(Course).all()
+    cMap     = {c.id: c.name for c in courses}
     return [{
         "id":            s.id,
         "name":          s.name,
         "course_id":     s.course_id,
-        "course_name":   s.course_name or "",
+        "course_name":   cMap.get(s.course_id, ""),
         "teacher_id":    s.teacher_id,
-        "teacher_name":  s.teacher_name or "",
         "semester":      s.semester or 1,
         "total_classes": s.total_classes or 68,
     } for s in subjects]
@@ -225,12 +225,10 @@ def delete_subject(id: int, db: Session = Depends(get_db)):
 
 @router.post("/holiday/mark")
 def mark_holiday(data: HolidayInput, db: Session = Depends(get_db)):
-    # Check already marked
     existing = db.query(Holiday).filter(Holiday.date == data.date).first()
     if existing:
         raise HTTPException(400, f"{data.date} is already marked as holiday ❌")
 
-    # Validate date is today or future only
     try:
         holiday_date = datetime.datetime.strptime(data.date, "%d-%m-%Y").date()
     except ValueError:
@@ -239,25 +237,20 @@ def mark_holiday(data: HolidayInput, db: Session = Depends(get_db)):
     if holiday_date < datetime.date.today():
         raise HTTPException(400, "Cannot mark past dates as holiday ❌")
 
-    # Save holiday
     holiday = Holiday(date=data.date, reason=data.reason)
     db.add(holiday)
 
-    # Reduce total_classes by 1 for ALL subjects
     all_subjects = db.query(Subject).all()
     for subject in all_subjects:
         subject.total_classes = max(0, (subject.total_classes or 68) - 1)
 
-    # Insert "Holiday" attendance for ALL students for ALL subjects
     all_students = db.query(Student).all()
     inserted = 0
     for student in all_students:
-        # Get subjects for this student's course
         student_subjects = db.query(Subject).filter(
             Subject.course_id == student.course_id
         ).all()
         for subject in student_subjects:
-            # Check not already exists
             exists = db.query(Attendance).filter(
                 Attendance.student_id == student.id,
                 Attendance.subject_id == subject.id,
@@ -265,48 +258,40 @@ def mark_holiday(data: HolidayInput, db: Session = Depends(get_db)):
             ).first()
             if not exists:
                 db.add(Attendance(
-                    student_id   = student.id,
-                    student_name = student.name,
-                    subject_id   = subject.id,
-                    subject_name = subject.name,
-                    date         = data.date,
-                    is_present   = "Holiday",
-                    gps_lat      = None,
-                    gps_lng      = None
+                    student_id = student.id,
+                    subject_id = subject.id,
+                    date       = data.date,
+                    is_present = False,
+                    gps_lat    = None,
+                    gps_lng    = None,
                 ))
                 inserted += 1
 
     db.commit()
     return {
-        "message":        f"Holiday marked for {data.date} ✅",
-        "reason":         data.reason,
-        "records_added":  inserted,
-        "subjects_updated": len(all_subjects)
+        "message":          f"Holiday marked for {data.date} ✅",
+        "reason":           data.reason,
+        "records_added":    inserted,
+        "subjects_updated": len(all_subjects),
     }
 
 @router.get("/holidays")
 def get_holidays(db: Session = Depends(get_db)):
     holidays = db.query(Holiday).order_by(Holiday.date).all()
-    return [{
-        "id":     h.id,
-        "date":   h.date,
-        "reason": h.reason
-    } for h in holidays]
+    return [{"id": h.id, "date": h.date, "reason": h.reason} for h in holidays]
 
 @router.delete("/holiday/{id}")
 def delete_holiday(id: int, db: Session = Depends(get_db)):
     h = db.query(Holiday).filter(Holiday.id == id).first()
     if not h: raise HTTPException(404, "Holiday not found ❌")
 
-    # Restore total_classes by 1 for ALL subjects
     all_subjects = db.query(Subject).all()
     for subject in all_subjects:
         subject.total_classes = min(68, (subject.total_classes or 0) + 1)
 
-    # Remove Holiday attendance records for that date
     db.query(Attendance).filter(
-        Attendance.date       == h.date,
-        Attendance.is_present == "Holiday"
+        Attendance.date      == h.date,
+        Attendance.is_present == False,
     ).delete()
 
     db.delete(h)
@@ -349,18 +334,18 @@ def get_all_timetable(db: Session = Depends(get_db)):
 
 @router.get("/timetable/today")
 def get_today_timetable(db: Session = Depends(get_db)):
-    today   = datetime.datetime.now().strftime("%A")
-    entries = db.query(Timetable).filter(Timetable.day == today).all()
+    today    = datetime.datetime.now().strftime("%A")
+    entries  = db.query(Timetable).filter(Timetable.day == today).all()
     subjects = db.query(Subject).all()
     teachers = db.query(Teacher).all()
+    courses  = db.query(Course).all()
     sMap     = {s.id: s for s in subjects}
     tMap     = {t.id: f"{t.name} ({t.qualification or 'N/A'})" for t in teachers}
-    courses  = db.query(Course).all()
     cMap     = {c.id: c.name for c in courses}
 
     grouped = {}
     for e in entries:
-        sub    = sMap.get(e.subject_id)
+        sub = sMap.get(e.subject_id)
         if not sub: continue
         course = cMap.get(sub.course_id, "Unknown")
         if course not in grouped:
@@ -369,12 +354,12 @@ def get_today_timetable(db: Session = Depends(get_db)):
             "subject_name": sub.name,
             "start_time":   e.start_time,
             "end_time":     e.end_time,
-            "faculty":      tMap.get(sub.teacher_id, "Not assigned")
+            "faculty":      tMap.get(sub.teacher_id, "Not assigned"),
         })
 
     return {
         "today":   today,
-        "grouped": [{"course": k, "slots": v} for k, v in grouped.items()]
+        "grouped": [{"course": k, "slots": v} for k, v in grouped.items()],
     }
 
 @router.delete("/timetable/{id}")
@@ -397,7 +382,7 @@ def get_teachers(db: Session = Depends(get_db)):
         "email":           t.email,
         "qualification":   t.qualification or "N/A",
         "department_id":   t.department_id,
-        "department_name": dMap.get(t.department_id, "Not assigned")
+        "department_name": dMap.get(t.department_id, "Not assigned"),
     } for t in teachers]
 
 @router.delete("/teacher/{id}")
@@ -427,8 +412,8 @@ def faculty_overview(db: Session = Depends(get_db)):
                 "id":            t.id,
                 "name":          t.name,
                 "qualification": t.qualification or "N/A",
-                "email":         t.email
-            } for t in dept_teachers]
+                "email":         t.email,
+            } for t in dept_teachers],
         })
     return result
 
@@ -448,12 +433,12 @@ def students_overview(db: Session = Depends(get_db)):
             groups.append({
                 "course_id":      c.id,
                 "course_name":    c.name,
-                "total_students": len(group_students)
+                "total_students": len(group_students),
             })
         result.append({
             "department_name": d.name,
             "groups":          groups,
-            "total_students":  sum(g["total_students"] for g in groups)
+            "total_students":  sum(g["total_students"] for g in groups),
         })
     return result
 
@@ -480,20 +465,16 @@ def remove_student(id: int, db: Session = Depends(get_db)):
     db.delete(student); db.commit()
     return {"message": "Deleted ✅"}
 
-
-# ── Semester Settings ────────────────────────────────────────
-class SemesterSettingsSchema(BaseModel):
-    semester_start_date: str
-    semester_end_date:   str
+# ── Semester Settings ──────────────────────────────────────
 
 @router.get("/semester-settings")
 def get_semester_settings(db: Session = Depends(get_db)):
-    s = db.query(SemesterSettings).filter(SemesterSettings.is_active == True).first()
+    s = db.query(SemesterSettings).first()
     if not s:
-        return {"start_date": None, "end_date": None, "semester": None, "academic_year": None, "is_active": False}
+        return {"semester_start_date": None, "semester_end_date": None}
     return {
-        "id":            s.id,
-       "semester_start_date":  s.semester_start_date,
+        "id":                   s.id,
+        "semester_start_date":  s.semester_start_date,
         "semester_end_date":    s.semester_end_date,
     }
 
@@ -501,9 +482,11 @@ def get_semester_settings(db: Session = Depends(get_db)):
 def save_semester_settings(data: SemesterSettingsSchema, db: Session = Depends(get_db)):
     s = db.query(SemesterSettings).first()
     if s:
+        # Update existing row
         s.semester_start_date = data.semester_start_date
         s.semester_end_date   = data.semester_end_date
     else:
+        # Insert first time
         s = SemesterSettings(
             semester_start_date = data.semester_start_date,
             semester_end_date   = data.semester_end_date,
@@ -517,20 +500,17 @@ def save_semester_settings(data: SemesterSettingsSchema, db: Session = Depends(g
 
 @router.get("/attendance/course/{course_id}")
 def get_course_attendance(course_id: int, db: Session = Depends(get_db)):
-    from models import Attendance as AttModel
     students = db.query(Student).filter(Student.course_id == course_id).all()
     subjects = db.query(Subject).filter(Subject.course_id == course_id).all()
     course   = db.query(Course).filter(Course.id == course_id).first()
 
-    # Pre-load all attendance records for these students + subjects in one query
     student_ids = [s.id for s in students]
     subject_ids = [sub.id for sub in subjects]
-    all_att = db.query(AttModel).filter(
-        AttModel.student_id.in_(student_ids),
-        AttModel.subject_id.in_(subject_ids)
+    all_att     = db.query(Attendance).filter(
+        Attendance.student_id.in_(student_ids),
+        Attendance.subject_id.in_(subject_ids),
     ).all()
 
-    # Index: {(student_id, subject_id): [records]}
     att_map = {}
     for a in all_att:
         key = (a.student_id, a.subject_id)
@@ -545,7 +525,7 @@ def get_course_attendance(course_id: int, db: Session = Depends(get_db)):
         overall_total   = 0
         for sub in subjects:
             records = att_map.get((s.id, sub.id), [])
-            present = sum(1 for a in records if a.is_present == "Present")
+            present = sum(1 for a in records if a.is_present == True)
             total   = sub.total_classes or 0
             pct     = round((present / total) * 100, 1) if total > 0 else 0
             overall_present += present
@@ -572,7 +552,7 @@ def get_course_attendance(course_id: int, db: Session = Depends(get_db)):
     return {
         "course_name": course.name if course else "",
         "students":    result,
-        "subjects":    [{ "id": sub.id, "name": sub.name, "total": sub.total_classes } for sub in subjects],
+        "subjects":    [{"id": sub.id, "name": sub.name, "total": sub.total_classes} for sub in subjects],
     }
 
 # ── Overview Stats ─────────────────────────────────────────
@@ -585,5 +565,5 @@ def overview_stats(db: Session = Depends(get_db)):
         "teachers":    db.query(Teacher).count(),
         "students":    db.query(Student).count(),
         "subjects":    db.query(Subject).count(),
-        "holidays":    db.query(Holiday).count()
+        "holidays":    db.query(Holiday).count(),
     }
