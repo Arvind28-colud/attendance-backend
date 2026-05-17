@@ -115,14 +115,10 @@ class LabRecord(Base):
 
 # ── Semester Settings: admin sets class period ─────────────────
 class SemesterSettings(Base):
-    __tablename__ = "semester_settings"
+    __tablename__ = "settings"
     id           = Column(Integer, primary_key=True, index=True)
-    start_date   = Column(String(20))   # "DD-MM-YYYY"
-    end_date     = Column(String(20))   # "DD-MM-YYYY"
-    semester     = Column(Integer, nullable=True)
-    academic_year = Column(String(20), nullable=True)  # "2025-2026"
-    is_active    = Column(Boolean, default=True)
-    created_at   = Column(DateTime, default=datetime.datetime.now)
+    semester_start_date = Column(String(20), nullable=True)     # "DD-MM-YYYY"
+    semester_end_date   = Column(String(20), nullable=True)     # "DD-MM-YYYY"
 
 # ── Holiday: used by admin route ───────────────────────────
 class Holiday(Base):
