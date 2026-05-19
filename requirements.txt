@@ -11,4 +11,5 @@ cryptography==42.0.7
 python-dotenv
 numpy
 Pillow
+httpx
 requests
