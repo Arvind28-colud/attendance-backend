@@ -67,6 +67,7 @@ class Student(Base):
     roll_no       = Column(String(50),  unique=True)
     password      = Column(String(255))
     course_id     = Column(Integer, ForeignKey("courses.id"))
+    course_name   = Column(String(100), nullable=True)
     year          = Column(String(20),  nullable=True)
     academic_year = Column(String(20),  nullable=True)
     semester      = Column(Integer, default=1)
