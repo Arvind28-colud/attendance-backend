@@ -81,12 +81,14 @@ def student_register(data: StudentRegisterInput, db: Session = Depends(get_db)):
     if db.query(Student).filter(Student.roll_no == data.roll_no).first():
         raise HTTPException(400, "Roll number already registered ❌")
 
+    course = db.query(Course).filter(Course.id == data.course_id).first()
     student = Student(
         name          = data.name,
         email         = data.email,
         roll_no       = data.roll_no.strip().upper(),
         password      = bcrypt.hash(data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')),
         course_id     = data.course_id,
+        course_name   = course.name if course else "",
         year          = data.year,
         semester      = data.semester,
         academic_year = data.academic_year,
