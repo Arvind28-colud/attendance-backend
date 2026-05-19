@@ -112,7 +112,7 @@ class LabRecord(Base):
     subject      = relationship("Subject")
     teacher      = relationship("Teacher")
 
-# ── Semester Settings — maps to your actual `settings` table ──
+# ── Semester Settings — maps to existing `settings` table ──────
 class SemesterSettings(Base):
     __tablename__ = "settings"
     id                  = Column(Integer, primary_key=True, index=True, autoincrement=True)
