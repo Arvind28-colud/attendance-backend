@@ -483,39 +483,40 @@ def remove_student(id: int, db: Session = Depends(get_db)):
 
 # ── Semester Settings ────────────────────────────────────────
 class SemesterSettingsSchema(BaseModel):
-    start_date:    str
-    end_date:      str
-    semester:      Optional[int] = None
-    academic_year: Optional[str] = None
+    start_date: str
+    end_date:   str
 
 @router.get("/semester-settings")
 def get_semester_settings(db: Session = Depends(get_db)):
-    s = db.query(SemesterSettings).filter(SemesterSettings.is_active == True).first()
-    if not s:
-        return {"start_date": None, "end_date": None, "semester": None, "academic_year": None, "is_active": False}
-    return {
-        "id":            s.id,
-        "start_date":    s.start_date,
-        "end_date":      s.end_date,
-        "semester":      s.semester,
-        "academic_year": s.academic_year,
-        "is_active":     s.is_active,
-    }
+    try:
+        s = db.query(SemesterSettings).first()
+        if not s:
+            return {"start_date": None, "end_date": None}
+        return {
+            "id":         s.id,
+            "start_date": s.semester_start_date,
+            "end_date":   s.semester_end_date,
+        }
+    except Exception as e:
+        return {"start_date": None, "end_date": None, "error": str(e)}
 
 @router.post("/semester-settings")
 def save_semester_settings(data: SemesterSettingsSchema, db: Session = Depends(get_db)):
-    # Deactivate any existing
-    db.query(SemesterSettings).update({"is_active": False})
-    db.commit()
-    s = SemesterSettings(
-        start_date    = data.start_date,
-        end_date      = data.end_date,
-        semester      = data.semester,
-        academic_year = data.academic_year,
-        is_active     = True,
-    )
-    db.add(s); db.commit(); db.refresh(s)
-    return {"message": "Semester settings saved ✅", "id": s.id}
+    try:
+        s = db.query(SemesterSettings).first()
+        if s:
+            s.semester_start_date = data.start_date
+            s.semester_end_date   = data.end_date
+        else:
+            s = SemesterSettings(
+                semester_start_date = data.start_date,
+                semester_end_date   = data.end_date,
+            )
+            db.add(s)
+        db.commit(); db.refresh(s)
+        return {"message": "Semester settings saved ✅", "id": s.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ── Attendance Report ──────────────────────────────────────
 
