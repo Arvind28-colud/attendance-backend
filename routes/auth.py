@@ -5,57 +5,15 @@ from models import Student, Teacher, Course, Department
 from passlib.hash import bcrypt
 from pydantic import BaseModel
 from typing import Optional
-import base64
 import json
-import io
 import os
-import requests
+import httpx
 
 router = APIRouter()
 
-# ── Face++ Config ───────────────────────────────────────────
-FACEPP_API_KEY     = os.getenv("FACEPP_API_KEY")
-FACEPP_API_SECRET  = os.getenv("FACEPP_API_SECRET")
-FACEPP_DETECT_URL  = "https://api-us.faceplusplus.com/facepp/v3/detect"
-FACEPP_COMPARE_URL = "https://api-us.faceplusplus.com/facepp/v3/compare"
-
-# ── Face++ Helper Functions ─────────────────────────────────
-def detect_face(image_base64: str) -> str:
-    """Send image to Face++ and get face_token"""
-    try:
-        response = requests.post(FACEPP_DETECT_URL, data={
-            "api_key":        FACEPP_API_KEY,
-            "api_secret":     FACEPP_API_SECRET,
-            "image_base64":   image_base64,
-            "return_landmark": 0,
-            "return_attributes": "none"
-        })
-        result = response.json()
-        print(f"[Face++ Detect] {result}")
-        if "faces" not in result or len(result["faces"]) == 0:
-            return None
-        return result["faces"][0]["face_token"]
-    except Exception as e:
-        print(f"[Face++ Detect Error] {e}")
-        return None
-
-def compare_faces(face_token1: str, face_token2: str) -> float:
-    """Compare two face tokens and return confidence score"""
-    try:
-        response = requests.post(FACEPP_COMPARE_URL, data={
-            "api_key":      FACEPP_API_KEY,
-            "api_secret":   FACEPP_API_SECRET,
-            "face_token1":  face_token1,
-            "face_token2":  face_token2,
-        })
-        result = response.json()
-        print(f"[Face++ Compare] {result}")
-        if "confidence" not in result:
-            return 0.0
-        return result["confidence"]
-    except Exception as e:
-        print(f"[Face++ Compare Error] {e}")
-        return 0.0
+# ── HuggingFace ArcFace Space URL ──────────────────────────
+# Replace with your actual HuggingFace Space URL after deploying
+HF_URL = os.getenv("HF_URL", "https://YOUR-USERNAME-YOUR-SPACE-NAME.hf.space")
 
 # ── Input Models ────────────────────────────────────────────
 class StudentRegisterInput(BaseModel):
@@ -88,6 +46,33 @@ class FaceVerifyInput(BaseModel):
     roll_no:   str
     face_data: str   # base64 image
 
+# ── HuggingFace Helper ──────────────────────────────────────
+def hf_get_embedding(image_base64: str) -> dict:
+    """Send image to HuggingFace ArcFace Space and get 512-dim embedding"""
+    try:
+        res = httpx.post(
+            f"{HF_URL}/get-embedding",
+            json    = {"image": image_base64},
+            timeout = 60,   # HF cold start can take 30-60s
+        )
+        return res.json()
+    except Exception as e:
+        print(f"[HF Error] get-embedding: {e}")
+        return {"success": False, "error": str(e)}
+
+def hf_match_faces(live_image: str, stored_image: str) -> dict:
+    """Compare live face vs stored face using ArcFace on HuggingFace"""
+    try:
+        res = httpx.post(
+            f"{HF_URL}/match-faces",
+            json    = {"live_image": live_image, "stored_image": stored_image},
+            timeout = 60,
+        )
+        return res.json()
+    except Exception as e:
+        print(f"[HF Error] match-faces: {e}")
+        return {"success": False, "verified": False, "error": str(e)}
+
 # ── Student Register ────────────────────────────────────────
 @router.post("/student/register")
 def student_register(data: StudentRegisterInput, db: Session = Depends(get_db)):
@@ -96,7 +81,6 @@ def student_register(data: StudentRegisterInput, db: Session = Depends(get_db)):
     if db.query(Student).filter(Student.roll_no == data.roll_no).first():
         raise HTTPException(400, "Roll number already registered ❌")
 
-    course = db.query(Course).filter(Course.id == data.course_id).first()
     student = Student(
         name          = data.name,
         email         = data.email,
@@ -126,15 +110,21 @@ def update_face(data: UpdateFaceInput, db: Session = Depends(get_db)):
     if not student:
         raise HTTPException(404, "Student not found ❌")
 
-    # Send to Face++ and get face token
-    face_token = detect_face(data.face_data)
-    if not face_token:
-        raise HTTPException(400, "No face detected! Please retake in good lighting ❌")
+    # Send to HuggingFace ArcFace to get 512-dim embedding
+    result = hf_get_embedding(data.face_data)
 
-    # Store face token + original image in database
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        raise HTTPException(400, f"Face registration failed: {error} ❌")
+
+    embedding = result["embedding"]   # 512 numbers
+
+    # Store both embedding + original image in DB
+    # Embedding is used for fast matching
+    # Original image is backup for re-matching if needed
     student.face_data = json.dumps({
-        "face_token": face_token,
-        "image":      data.face_data
+        "embedding": embedding,         # 512-dim ArcFace vector
+        "image":     data.face_data,    # base64 original image
     })
     db.commit()
     return {"message": "Face registered successfully ✅"}
@@ -150,31 +140,64 @@ def verify_face(data: FaceVerifyInput, db: Session = Depends(get_db)):
     if not student.face_data:
         raise HTTPException(400, "No face registered. Please register face first ❌")
 
-    # Get stored face token
+    # Parse stored face data
     try:
-        stored       = json.loads(student.face_data)
-        stored_token = stored.get("face_token")
-        if not stored_token:
-            raise HTTPException(400, "Invalid face data. Please re-register face ❌")
+        stored      = json.loads(student.face_data)
+        stored_emb  = stored.get("embedding")
+        stored_img  = stored.get("image")
     except json.JSONDecodeError:
         raise HTTPException(400, "Invalid face data. Please re-register face ❌")
 
-    # Detect face in new image
-    new_token = detect_face(data.face_data)
-    if not new_token:
-        raise HTTPException(400, "No face detected! Try better lighting ❌")
+    # ── Fast path: compare embeddings directly (no HF call needed) ──
+    if stored_emb:
+        try:
+            import numpy as np
+            # Get embedding for live image from HuggingFace
+            live_result = hf_get_embedding(data.face_data)
+            if not live_result.get("success"):
+                raise HTTPException(400, f"Face detection failed: {live_result.get('error')} ❌")
 
-    # Compare faces using Face++
-    confidence = compare_faces(stored_token, new_token)
-    match      = confidence >= 80  # 80% threshold for strict verification
+            live_emb = live_result["embedding"]
 
-    print(f"[Face++] {student.roll_no} → confidence: {confidence:.1f}% → {'✅' if match else '❌'}")
+            # Cosine similarity locally — no second HF call needed
+            e1  = np.array(stored_emb)
+            e2  = np.array(live_emb)
+            cos = float(np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2)))
 
-    return {
-        "match":      match,
-        "confidence": round(confidence, 1),
-        "message":    f"Face matched ✅ ({confidence:.1f}% confidence)" if match else f"Face not matched ❌ ({confidence:.1f}%) — possible proxy attendance!"
-    }
+            verified   = cos > 0.5
+            confidence = round(cos * 100, 1)
+
+            print(f"[ArcFace] {student.roll_no} → score: {cos:.3f} ({confidence}%) → {'✅' if verified else '❌'}")
+
+            return {
+                "match":      verified,
+                "confidence": confidence,
+                "message":    f"Face matched ✅ ({confidence}% confidence)" if verified
+                              else f"Face not matched ❌ ({confidence}%) — possible proxy attendance!",
+            }
+        except Exception as e:
+            print(f"[Embedding compare error] {e}")
+            # Fall through to image-based comparison
+
+    # ── Fallback: send both images to HuggingFace for comparison ──
+    if stored_img:
+        result = hf_match_faces(data.face_data, stored_img)
+        if not result.get("success"):
+            raise HTTPException(400, f"Face verification failed: {result.get('error')} ❌")
+
+        verified   = result["verified"]
+        confidence = result["confidence"]
+
+        print(f"[ArcFace HF] {student.roll_no} → {confidence}% → {'✅' if verified else '❌'}")
+
+        return {
+            "match":      verified,
+            "confidence": confidence,
+            "message":    f"Face matched ✅ ({confidence}% confidence)" if verified
+                          else f"Face not matched ❌ ({confidence}%) — possible proxy attendance!",
+        }
+
+    raise HTTPException(400, "No face data available. Please re-register ❌")
 
 # ── Get Face Status ─────────────────────────────────────────
 @router.get("/student/face/{roll_no}")
@@ -186,7 +209,7 @@ def get_face_status(roll_no: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Student not found ❌")
     return {
         "has_face": student.face_data is not None,
-        "roll_no":  student.roll_no
+        "roll_no":  student.roll_no,
     }
 
 # ── Student Login ───────────────────────────────────────────
@@ -231,7 +254,6 @@ def student_login(data: LoginInput, db: Session = Depends(get_db)):
 def teacher_register(data: TeacherRegisterInput, db: Session = Depends(get_db)):
     if db.query(Teacher).filter(Teacher.email == data.email).first():
         raise HTTPException(400, "Email already registered ❌")
-    dept = db.query(Department).filter(Department.id == data.department_id).first() if data.department_id else None
     teacher = Teacher(
         name          = data.name,
         email         = data.email,
