@@ -16,7 +16,7 @@ router = APIRouter()
 
 HF_URL = os.getenv("HF_URL", "https://YOUR-USERNAME-YOUR-SPACE-NAME.hf.space")
 
-# ── Input Data Validations ───────────────────────────────────
+# ── Input Models ────────────────────────────────────────────
 class StudentRegisterInput(BaseModel):
     name:          str
     email:         str
@@ -41,16 +41,16 @@ class LoginInput(BaseModel):
 
 class UpdateFaceInput(BaseModel):
     roll_no:   str
-    face_data: str 
+    face_data: str
 
 class FaceVerifyInput(BaseModel):
     roll_no:   str
-    face_data: str  
+    face_data: str
 
 class GridCheckInput(BaseModel):
     face_data: str
 
-# ── HuggingFace Connections ─────────────────────────────────
+# ── HuggingFace Helpers ─────────────────────────────────────
 def hf_get_embedding(image_base64: str) -> dict:
     try:
         res = httpx.post(
@@ -75,55 +75,35 @@ def hf_match_faces(live_image: str, stored_image: str) -> dict:
         print(f"[HF Error] match-faces: {e}")
         return {"success": False, "verified": False, "error": str(e)}
 
-# ── Exact face-api.js Oval Grid Calibration ─────────────────
+# ── Oval Grid Alignment Check ────────────────────────────────
 def check_oval_alignment(bbox: list, img_w: int, img_h: int) -> dict:
-    """
-    Computes mathematical boundaries against a formal 72% Width / 62% Height
-    elliptical target envelope mapped onto the physical dimensions of the frame matrix.
-    """
     if not bbox or len(bbox) < 4:
         return {"ok": False, "reason": "No face detected 🔍"}
-
-    # Translate absolute pixel maps to normalized vector properties [0.0 -> 1.0]
-    norm_x_min = bbox[0] / img_w
-    norm_y_min = bbox[1] / img_h
-    norm_x_max = bbox[2] / img_w
-    norm_y_max = bbox[3] / img_h
-
-    face_w = norm_x_max - norm_x_min
-    face_h = norm_y_max - norm_y_min
+    norm_x_min    = bbox[0] / img_w
+    norm_y_min    = bbox[1] / img_h
+    norm_x_max    = bbox[2] / img_w
+    norm_y_max    = bbox[3] / img_h
+    face_w        = norm_x_max - norm_x_min
+    face_h        = norm_y_max - norm_y_min
     face_center_x = norm_x_min + (face_w / 2)
     face_center_y = norm_y_min + (face_h / 2)
-
-    # UI Oval Overlay constants (72% screen width, 62% screen height)
     target_oval_w = 0.72
-    target_oval_h = 0.62
     target_center_x = 0.50
     target_center_y = 0.50
-
-    # Test 1: Center Drift (Threshold = Max 8% variance allowed from origin center)
     max_drift = 0.08
-    drift_x = abs(face_center_x - target_center_x)
-    drift_y = abs(face_center_y - target_center_y)
-
+    drift_x   = abs(face_center_x - target_center_x)
+    drift_y   = abs(face_center_y - target_center_y)
     if drift_x > max_drift:
-        return {"ok": False, "reason": "Center your face → Move Right" if face_center_x < target_center_x else "Center your face → Move Left"}
+        return {"ok": False, "reason": "Move Right" if face_center_x < target_center_x else "Move Left"}
     if drift_y > max_drift:
-        return {"ok": False, "reason": "Center your face → Move Down" if face_center_y < target_center_y else "Center your face → Move Up"}
-
-    # Test 2: Scale Factor / Target Proximity (Face must cleanly occupy 65% to 95% of target window)
-    min_scale = 0.65
-    max_scale = 0.95
+        return {"ok": False, "reason": "Move Down" if face_center_y < target_center_y else "Move Up"}
     current_scale = face_w / target_oval_w
-
-    if current_scale < min_scale:
+    if current_scale < 0.65:
         return {"ok": False, "reason": "Come closer to the camera"}
-    if current_scale > max_scale:
+    if current_scale > 0.95:
         return {"ok": False, "reason": "Step back slightly"}
+    return {"ok": True, "reason": "Face aligned ✅"}
 
-    return {"ok": True, "reason": "Face Aligned Successfully ✅"}
-
-# ── Live Polling Grid Alignment Endpoint ────────────────────
 @router.post("/student/check-grid-alignment")
 def check_grid_alignment(data: GridCheckInput):
     try:
@@ -131,16 +111,13 @@ def check_grid_alignment(data: GridCheckInput):
         image = Image.open(io.BytesIO(image_bytes))
         img_w, img_h = image.size
     except Exception:
-        raise HTTPException(400, "Corrupted frame data array")
-
+        raise HTTPException(400, "Invalid image data")
     result = hf_get_embedding(data.face_data)
     if not result.get("success"):
         return {"ok": False, "reason": "No face found 🔍"}
-
     bbox = result.get("bbox")
     if not bbox:
-        raise HTTPException(400, "Hugging Face endpoint missing 'bbox' coordinate payload mappings")
-
+        return {"ok": False, "reason": "No face detected 🔍"}
     return check_oval_alignment(bbox, img_w, img_h)
 
 # ── Student Register ────────────────────────────────────────
@@ -150,7 +127,6 @@ def student_register(data: StudentRegisterInput, db: Session = Depends(get_db)):
         raise HTTPException(400, "Email already registered ❌")
     if db.query(Student).filter(Student.roll_no == data.roll_no).first():
         raise HTTPException(400, "Roll number already registered ❌")
-
     course = db.query(Course).filter(Course.id == data.course_id).first()
     student = Student(
         name          = data.name,
@@ -176,17 +152,17 @@ def student_register(data: StudentRegisterInput, db: Session = Depends(get_db)):
 # ── Update Face ─────────────────────────────────────────────
 @router.post("/student/update-face")
 def update_face(data: UpdateFaceInput, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.roll_no == data.roll_no.strip().upper()).first()
+    student = db.query(Student).filter(
+        Student.roll_no == data.roll_no.strip().upper()
+    ).first()
     if not student:
-        raise HTTPException(404, "Student profile execution target not found")
-
+        raise HTTPException(404, "Student not found ❌")
     result = hf_get_embedding(data.face_data)
     if not result.get("success"):
-        raise HTTPException(400, f"Face registration failed: {result.get('error', 'Unknown Error')} ❌")
-
+        raise HTTPException(400, f"Face registration failed: {result.get('error', 'Unknown error')} ❌")
     student.face_data = json.dumps({
-        "embedding": result["embedding"],         
-        "image":     data.face_data,    
+        "embedding": result["embedding"],
+        "image":     data.face_data,
     })
     db.commit()
     return {"message": "Face registered successfully ✅"}
@@ -194,71 +170,133 @@ def update_face(data: UpdateFaceInput, db: Session = Depends(get_db)):
 # ── Verify Face ─────────────────────────────────────────────
 @router.post("/student/verify-face")
 def verify_face(data: FaceVerifyInput, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.roll_no == data.roll_no.strip().upper()).first()
-    if not student: raise HTTPException(404, "Student not found ❌")
-    if not student.face_data: raise HTTPException(400, "No face registered ❌")
-
+    student = db.query(Student).filter(
+        Student.roll_no == data.roll_no.strip().upper()
+    ).first()
+    if not student:
+        raise HTTPException(404, "Student not found ❌")
+    if not student.face_data:
+        raise HTTPException(400, "No face registered. Please register face first ❌")
     try:
-        stored = json.loads(student.face_data)
+        stored     = json.loads(student.face_data)
         stored_emb = stored.get("embedding")
         stored_img = stored.get("image")
     except json.JSONDecodeError:
-        raise HTTPException(400, "Invalid face data structural schema ❌")
+        raise HTTPException(400, "Invalid face data. Please re-register ❌")
 
+    # Fast path: cosine similarity
     if stored_emb:
         try:
             import numpy as np
             live_result = hf_get_embedding(data.face_data)
             if not live_result.get("success"):
-                raise HTTPException(400, "Face extraction failed ❌")
-
-            e1 = np.array(stored_emb)
-            e2 = np.array(live_result["embedding"])
+                raise HTTPException(400, f"Face detection failed: {live_result.get('error')} ❌")
+            e1  = np.array(stored_emb)
+            e2  = np.array(live_result["embedding"])
             cos = float(np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2)))
-
-            verified = cos > 0.5
+            verified   = cos > 0.5
             confidence = round(cos * 100, 1)
-
+            print(f"[ArcFace] {student.roll_no} → {confidence}% → {'✅' if verified else '❌'}")
             return {
                 "match":      verified,
                 "confidence": confidence,
-                "message":    f"Face matched ✅ ({confidence}%)" if verified else f"Face not matched ❌ ({confidence}%)",
+                "message":    f"Face matched ✅ ({confidence}%)" if verified
+                              else f"Face not matched ❌ ({confidence}%) — possible proxy!",
             }
-        except Exception:
-            pass # Fall through to backup logic below if array shapes clash
+        except Exception as e:
+            print(f"[Embedding error] {e}")
 
+    # Fallback: image comparison
     if stored_img:
         result = hf_match_faces(data.face_data, stored_img)
-        if not result.get("success"): raise HTTPException(400, "Verification pipeline failure")
-        return {"match": result["verified"], "confidence": result["confidence"], "message": "Face verified via fallback match engine"}
+        if not result.get("success"):
+            raise HTTPException(400, f"Face verification failed: {result.get('error')} ❌")
+        return {
+            "match":      result["verified"],
+            "confidence": result["confidence"],
+            "message":    f"Face matched ✅" if result["verified"] else f"Face not matched ❌",
+        }
 
-    raise HTTPException(400, "No matching parameter targets found")
+    raise HTTPException(400, "No face data available. Please re-register ❌")
 
-# ── Secondary Boilerplate Context Routes ───────────────────
+# ── Get Face Status ─────────────────────────────────────────
 @router.get("/student/face/{roll_no}")
 def get_face_status(roll_no: str, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.roll_no == roll_no.strip().upper()).first()
-    if not student: raise HTTPException(404, "Target missing")
+    student = db.query(Student).filter(
+        Student.roll_no == roll_no.strip().upper()
+    ).first()
+    if not student:
+        raise HTTPException(404, "Student not found ❌")
     return {"has_face": student.face_data is not None, "roll_no": student.roll_no}
 
+# ── Student Login ───────────────────────────────────────────
 @router.post("/student/login")
 def student_login(data: LoginInput, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.roll_no == data.roll_no.strip().upper()).first() if data.roll_no else db.query(Student).filter(Student.email == data.email).first()
-    if not student or not bcrypt.verify(data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore'), student.password):
-        raise HTTPException(401, "Invalid credentials")
-    if not student.face_data: raise HTTPException(403, "Face setup mandatory")
-    return {"message": "Login successful ✅", "roll_no": student.roll_no, "name": student.name}
+    if not data.roll_no and not data.email:
+        raise HTTPException(400, "Roll number or email required ❌")
+    student = None
+    if data.roll_no:
+        student = db.query(Student).filter(
+            Student.roll_no == data.roll_no.strip().upper()
+        ).first()
+    else:
+        student = db.query(Student).filter(Student.email == data.email).first()
+    if not student:
+        raise HTTPException(401, "Invalid credentials ❌")
+    pwd = data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    if not bcrypt.verify(pwd, student.password):
+        raise HTTPException(401, "Invalid credentials ❌")
+    if not student.face_data:
+        raise HTTPException(403, "Face not registered. Please complete registration ❌")
+    course = db.query(Course).filter(Course.id == student.course_id).first()
+    return {
+        "message":     "Login successful ✅",
+        "student_id":  student.id,
+        "name":        student.name,
+        "email":       student.email,
+        "roll_no":     student.roll_no,
+        "course_id":   student.course_id,
+        "course_name": course.name if course else "",
+        "semester":    student.semester,
+        "year":        student.year,
+        "academic_year": student.academic_year,
+    }
 
+# ── Teacher Register ────────────────────────────────────────
 @router.post("/teacher/register")
 def teacher_register(data: TeacherRegisterInput, db: Session = Depends(get_db)):
-    if db.query(Teacher).filter(Teacher.email == data.email).first(): raise HTTPException(400, "Email taken")
-    teacher = Teacher(name=data.name, email=data.email, password=bcrypt.hash(data.password))
+    if db.query(Teacher).filter(Teacher.email == data.email).first():
+        raise HTTPException(400, "Email already registered ❌")
+    teacher = Teacher(
+        name          = data.name,
+        email         = data.email,
+        password      = bcrypt.hash(data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')),
+        qualification = data.qualification,
+        department_id = data.department_id,
+    )
     db.add(teacher)
     db.commit()
-    return {"message": "Success"}
+    db.refresh(teacher)
+    return {"message": "Teacher registered ✅", "teacher_id": teacher.id}
 
+# ── Teacher Login ───────────────────────────────────────────
 @router.post("/teacher/login")
 def teacher_login(data: LoginInput, db: Session = Depends(get_db)):
     teacher = db.query(Teacher).filter(Teacher.email == data.email).first()
-    if not teacher or not bcrypt.verify(data.password, teacher.password): raise HTTPException(401, "Failed")
-    return {"message": "Success"}
+    if not teacher:
+        raise HTTPException(401, "Invalid email or password ❌")
+    pwd = data.password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    if not bcrypt.verify(pwd, teacher.password):
+        raise HTTPException(401, "Invalid email or password ❌")
+    dept = db.query(Department).filter(
+        Department.id == teacher.department_id
+    ).first() if teacher.department_id else None
+    return {
+        "message":         "Login successful ✅",
+        "teacher_id":      teacher.id,
+        "name":            teacher.name,
+        "email":           teacher.email,
+        "qualification":   teacher.qualification,
+        "department_id":   teacher.department_id,
+        "department_name": dept.name if dept else "",
+    }
